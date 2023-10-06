@@ -35,7 +35,7 @@ We list some representative cases to demonstrate the power of Muffin. We refer r
 
 ### Outside Knowledge Visual QA
 
-![case](./images/case_reasoning.jpg)
+![case](./images/case-onion.jpg)
 
 
 ### Culture
