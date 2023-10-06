@@ -2,7 +2,7 @@
 
 # 🥞 Muffin
 
-**Multimodal foundation models are better bridges towards LLMs**
+**Multimodal foundation models are found to be “out-of-the-box” multimodal interfaces for LLMs**
 <p align="center">
   <a href="#Serving">🔥 Try It Now!</a> •
   <a href="#Install">🔧 Install</a> •
