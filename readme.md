@@ -7,6 +7,7 @@
   <a href="#Serving">🔥 Try It Now!</a> •
   <a href="#Install">🔧 Install</a> •
   <a href=#Fine-tuning> 🙌 Build Your Muffin </a>
+  <a href='https://arxiv.org/pdf/2310.00653.pdf'> 📄 Our Paper </a>
 </p>
 
 </div>
