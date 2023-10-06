@@ -89,7 +89,7 @@ bash ./script/init.sh
 
 ## Muffin Weights
 
-We release Muffin weights on [Hugging Face](https://huggingface.co/Yirany/Muffin-13B/tree/main). To load Muffin for inference:
+We release Muffin weights on [Hugging Face](https://huggingface.co/Yirany/Muffin-13B/tree/main) (still uploading, will be available soon). To load Muffin for inference:
 
 ```py
 from muffin.eval.muffin_vqa import init_muffin
@@ -100,7 +100,7 @@ model, image_processor, image_token_len, tokenizer = init_muffin('Yirany/Muffin-
 
 ### Muffin pretrained weights
 
-We also provice the [pretrained Muffin weights](https://huggingface.co/Yirany/Muffin-13B-pretrained/tree/main) without training on instruction following data.
+We also provice the [pretrained Muffin weights](https://huggingface.co/Yirany/Muffin-13B-pretrained/tree/main) (uploading, will be available soon) without training on instruction following data.
 
 ## Serving
 
