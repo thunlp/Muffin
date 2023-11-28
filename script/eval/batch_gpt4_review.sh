@@ -41,10 +41,10 @@ do
         fi
         echo "EVAL qa90 "$REPLY
         python ./eval/eval_gpt_review_visual.py \
-            --question ./playground/data/coco2014_val_qa_eval/qa90_questions.jsonl \
+            --question ./eval/data/qa90_questions.jsonl \
             --context ./muffin/eval/table/caps_boxes_coco2014_val_80.jsonl \
             --answer-list \
-            ./playground/data/coco2014_val_qa_eval/qa90_gpt4_answer.jsonl \
+            ./eval/data/qa90_gpt4_answer.jsonl \
             $REPLY \
             --rule ./muffin/eval/table/rule.json \
             --output /home/zhanghaoye/data/eval_test/$REPLY.llava_test_gpt4.jsonl &

@@ -31,7 +31,7 @@ echo "Process these checkpoints: [$filered_to_process_ckpt_list]"
 
 
 C=0
-q_file=./playground/data/coco2014_val_qa_eval/qa90_questions_with_image.jsonl
+q_file=./eval/data/qa90_questions_with_image.jsonl
 
 for ckpt_path in $filered_to_process_ckpt_list;
 do
