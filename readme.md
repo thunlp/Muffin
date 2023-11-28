@@ -82,10 +82,38 @@ cd muffin
 ```
 
 2. Download training data and install dependencies.
+
 ```Shell
-bash ./script/init.sh
+bash download_data.sh
+
+echo "Creating conda environment"
+conda create -n muffin python=3.10
+conda activate muffin
+
+echo "Installing dependencies"
+pip install -e .
+
+# Install specific version of transformers to make sure you can reproduce the experimental results in our papers
+git clone --recursive git@github.com:huggingface/transformers.git
+cd transformers
+git checkout 1194c3e315996d0bb0c64b851b4d76d9ee63ea04
+pip install .
+cd ..
 ```
 
+### Training
+
+Install additional packages if you need to do training.
+
+```Shell
+git clone --recursive https://github.com/Dao-AILab/flash-attention.git
+cd flash-attention
+
+# uncomment the following line if you have CUDA version < 11.6
+# git checkout 757058d
+MAX_JOBS=8 python setup.py install
+cd ..
+```
 
 ## Muffin Weights
 

@@ -100,8 +100,12 @@ def SFT_collator_fn(instances, pad_token_id):
 
 
 def encode_multimodal_preference_sample(source, tokenizer, multimodal_cfg):
-    win_conv = copy.deepcopy([source['question'], source["chosen"]])
-    rej_conv = copy.deepcopy([source['question'], source["rejected"]])
+    if isinstance(source['chosen'], list):
+        win_conv = source['chosen']
+        rej_conv = source['rejected']
+    elif isinstance(source['chosen'], dict):
+        win_conv = copy.deepcopy([source['question'], source["chosen"]])
+        rej_conv = copy.deepcopy([source['question'], source["rejected"]])
 
     if 'image' in source:
         image =  source['image']
@@ -128,6 +132,10 @@ def encode_multimodal_preference_sample(source, tokenizer, multimodal_cfg):
     if 'ref_win_logp' in source:
         rej_data_dict['ref_rej_logp'] = source['ref_rej_logp']
         win_data_dict['ref_win_logp'] = source['ref_win_logp']
+        rej_data_dict['ref_rej_avg_logp'] = source['ref_rej_avg_logp']
+        win_data_dict['ref_win_avg_logp'] = source['ref_win_avg_logp']
+        rej_data_dict['ref_rej_per_token_logp'] = source['ref_rej_per_token_logp']
+        win_data_dict['ref_win_per_token_logp'] = source['ref_win_per_token_logp']
     return rej_data_dict, win_data_dict
 
 def expand_image_token(source, multimodal_cfg) -> Dict:

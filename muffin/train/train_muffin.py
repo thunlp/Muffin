@@ -16,24 +16,26 @@
 
 import os
 import timm
-import json
 import torch
 import logging
 import pathlib
 import getpass
 import transformers
-from PIL import Image
 
 from typing import Dict, Optional, Sequence, List
 from dataclasses import dataclass, field
 from torch.utils.data import Dataset
 
 from utils.utils import is_main_process, get_rank
-from muffin.train.trainers import MuffinTrainer
+from utils.diff_lib import get_diff_ids, color_print_diff_pair, split_into_words
+from muffin.train.trainers import MuffinTrainer, MuffinDPOTrainer
+from muffin.eval.muffin_inference_logp import preference_collator_fn, concate_pad
 from muffin import conversation as conversation_lib
 from muffin import LlavaLlamaForCausalLM, Beit3LlavaLlamaForCausalLM
 from muffin.model.muffin import interpolate_beit3
 from muffin.model.utils import stop_gradient_by_name
+from muffin.data.datasets import SingleDataSourceDataset, MultiDataSourceDataset
+from muffin.data.data_processors import register_data_path
 from muffin.train.train_utils import SFT_collator_fn, IGNORE_INDEX, encode_multimodal_sample, encode_multimodal_preference_sample
 
 DEFAULT_PAD_TOKEN = "[PAD]"
@@ -66,6 +68,9 @@ class DataArguments:
     data_source_names: str = 'unimm-chat'
     data_source_weights: str = '100'
 
+    dpo_beta: float = 0.5
+    dpo_token_weight: float = 3.0
+
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -84,6 +89,15 @@ class TrainingArguments(transformers.TrainingArguments):
     max_steps: int = field(default=1_000)
     no_randaug: bool = False
     fully_tune: bool = False
+
+    task: str = field(
+        default='LM',
+        metadata={
+            'help': 'LM for language modeling. DPO for direct preference optimization'
+        }
+    )
+    dpo_use_average: bool = False
+    dpo_token_weighted: bool = False
 
 
 def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
@@ -124,6 +138,14 @@ def smart_tokenizer_and_embedding_resize(
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
 
+def create_multi_data_source_dataset(data_source_names, data_source_weights):
+    ds_list = []
+    for name in data_source_names:
+        ds = SingleDataSourceDataset(name, *register_data_path[name]())
+        ds_list.append(ds)
+    ds = MultiDataSourceDataset(ds_list, data_source_weights)
+    return ds
+
 class LazySupervisedDataset(Dataset):
     def __init__(self,
                  tokenizer: transformers.PreTrainedTokenizer,
@@ -131,7 +153,7 @@ class LazySupervisedDataset(Dataset):
         super(LazySupervisedDataset, self).__init__()
 
         logging.warning("Loading data...")
-        list_data_dict = [json.loads(line) for line in open('./data/' + multimodal_cfg['data_source_names'][0] + '.json')]
+        list_data_dict = create_multi_data_source_dataset(multimodal_cfg['data_source_names'], multimodal_cfg['data_source_weights'])
 
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
@@ -142,14 +164,27 @@ class LazySupervisedDataset(Dataset):
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         source: dict = self.list_data_dict[i]
-
-        img_path = self.multimodal_cfg['image_folder'] + source['image_name'] + '.jpg'
-        source['image'] = Image.open(img_path).convert('RGB')
-        source['conversations'] = source['conversation']
-
         data_dict = encode_multimodal_sample(source, self.tokenizer, self.multimodal_cfg)
         return data_dict
 
+
+class DPODataset(Dataset):
+    def __init__(self,
+                 tokenizer: transformers.PreTrainedTokenizer,
+                 multimodal_cfg: dict):
+        super(DPODataset, self).__init__()
+
+        self.tokenizer = tokenizer
+        self.list_data_dict = create_multi_data_source_dataset(multimodal_cfg['data_source_names'], multimodal_cfg['data_source_weights'])
+        self.multimodal_cfg = multimodal_cfg
+
+    def __len__(self):
+        return len(self.list_data_dict)
+
+    def __getitem__(self, i):
+        source: dict = self.list_data_dict[i]
+        rej_data_dict, win_data_dict = encode_multimodal_preference_sample(source, self.tokenizer, self.multimodal_cfg)
+        return rej_data_dict, win_data_dict
 
 @dataclass
 class DataCollatorForSupervisedDataset(object):
@@ -157,6 +192,68 @@ class DataCollatorForSupervisedDataset(object):
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         return SFT_collator_fn(instances, self.tokenizer.pad_token_id)
+
+@dataclass
+class DataCollatorForDPODataset(object):
+    tokenizer: transformers.PreTrainedTokenizer
+    beta: float
+    mod_token_weight: float
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        batch = preference_collator_fn(instances, self.tokenizer.pad_token_id)
+
+        rej_instances, win_instances = list(zip(*instances))
+
+        batch['beta'] = self.beta
+        batch['ref_win_logp'] = torch.as_tensor([x['ref_win_logp'] for x in win_instances])
+        batch['ref_rej_logp'] = torch.as_tensor([x['ref_rej_logp'] for x in rej_instances])
+        batch['ref_win_avg_logp'] = torch.as_tensor([x['ref_win_avg_logp'] for x in win_instances])
+        batch['ref_rej_avg_logp'] = torch.as_tensor([x['ref_rej_avg_logp'] for x in rej_instances])
+
+        ref_win_per_token_logp = [torch.as_tensor(x['ref_win_per_token_logp']) for x in win_instances]
+        ref_rej_per_token_logp = [torch.as_tensor(x['ref_rej_per_token_logp']) for x in rej_instances]
+
+        batch['ref_win_per_token_logp'] = torch.nn.utils.rnn.pad_sequence(ref_win_per_token_logp, batch_first=True, padding_value=0)
+        batch['ref_rej_per_token_logp'] = torch.nn.utils.rnn.pad_sequence(ref_rej_per_token_logp, batch_first=True, padding_value=0)
+
+        win_input_ids = batch['win_input_ids']
+        rej_input_ids = batch['rej_input_ids']
+        win_labels = batch['win_labels']
+        rej_labels = batch['rej_labels']
+        assert batch['ref_win_per_token_logp'].size(1) >= win_input_ids.size(1) - 1, f"{batch['ref_win_per_token_logp'].size(1)} >= {win_input_ids.size(1) - 1}"
+        assert batch['ref_rej_per_token_logp'].size(1) >= rej_input_ids.size(1) - 1, f"{batch['ref_rej_per_token_logp'].size(1)} >= {rej_input_ids.size(1) - 1}"
+
+        # length of logp is one-token shorter since the last token's output is not used
+        batch['ref_win_per_token_logp'] = batch['ref_win_per_token_logp'][:, :win_input_ids.size(1) - 1]
+        batch['ref_rej_per_token_logp'] = batch['ref_rej_per_token_logp'][:, :rej_input_ids.size(1) - 1]
+
+        win_token_weight = torch.ones_like(batch['ref_win_per_token_logp'])
+        rej_token_weight = torch.ones_like(batch['ref_rej_per_token_logp'])
+
+        for idx, (w, r, wl, rl, wlogp, rlogp) in enumerate(zip(win_input_ids, rej_input_ids, win_labels, rej_labels, ref_win_per_token_logp, ref_rej_per_token_logp)):
+            valid_w = w[1:]
+            valid_r = r[1:]
+
+            min_match_size = 3
+            # TODO: add junk condition for space tokens like 13 for '\n'
+            r_mod, w_mod = get_diff_ids(valid_r.tolist(), valid_w.tolist(), min_match_size=min_match_size)
+            r_mod_tokens = valid_r[r_mod]
+            w_mod_tokens = valid_w[w_mod]
+
+            win_token_weight[idx][w_mod] = self.mod_token_weight
+            rej_token_weight[idx][r_mod] = self.mod_token_weight
+
+        batch['win_token_weight'] = win_token_weight
+        batch['rej_token_weight'] = rej_token_weight
+        batch['concatenated_token_weight'] = concate_pad(win_token_weight, rej_token_weight, 0)
+
+        for ins in win_instances:
+            assert len(ins['input_ids']) == len(ins['labels'])
+        for ins in rej_instances:
+            assert len(ins['input_ids']) == len(ins['labels'])
+        return batch
+
+
 
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
@@ -172,6 +269,24 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                     data_source_weights=getattr(data_args, 'data_source_weights')))
     print(f'Train data size is {len(train_dataset)}', flush=True)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    return dict(train_dataset=train_dataset,
+                eval_dataset=None,
+                data_collator=data_collator)
+
+
+def make_dpo_data_module(tokenizer, data_args):
+    train_dataset = DPODataset(tokenizer=tokenizer,
+                                multimodal_cfg=dict(
+                                    is_multimodal=data_args.is_multimodal,
+                                    image_token_len=data_args.image_token_len,
+                                    image_folder=data_args.image_folder,
+                                    image_aspect_ratio=data_args.image_aspect_ratio,
+                                    use_im_start_end=getattr(data_args, 'mm_use_im_start_end', False),
+                                    image_processor=getattr(data_args, 'train_image_processor', None),
+                                    data_source_names=getattr(data_args, 'data_source_names'),
+                                    data_source_weights=getattr(data_args, 'data_source_weights')))
+    print(f'Train data size is {len(train_dataset)}', flush=True)
+    data_collator = DataCollatorForDPODataset(tokenizer=tokenizer, beta=data_args.dpo_beta, mod_token_weight=data_args.dpo_token_weight)
     return dict(train_dataset=train_dataset,
                 eval_dataset=None,
                 data_collator=data_collator)
@@ -274,7 +389,11 @@ def init_model(model_args, data_args, training_args):
         vision_config.use_im_start_end = training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.initialize_vision_tokenizer(mm_use_im_start_end=model_args.mm_use_im_start_end, tokenizer=tokenizer, device=training_args.device,
                                           tune_mm_mlp_adapter=model_args.tune_mm_mlp_adapter)
-
+        if training_args.task == 'OCR':
+            special_token_list = ['<{}>'.format(idx) for idx in range(1024)]
+            tokenizer.add_tokens(['<quad>', '</quad>', '<ref>', '</ref>'], special_tokens=True)
+            tokenizer.add_tokens(special_token_list, special_tokens=True)
+            model.resize_token_embeddings(len(tokenizer))
         if model.config.fully_tune:
             model.requires_grad_(True)
 
@@ -303,7 +422,10 @@ def init_model(model_args, data_args, training_args):
 
                 FSDP.__init__ = patch_FSDP_use_orig_params(FSDP.__init__)
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    if training_args.task == 'LM' or training_args.task == 'OCR':
+        data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    elif training_args.task == 'DPO':
+        data_module = make_dpo_data_module(tokenizer, data_args=data_args)
     return model.cuda(), data_module, tokenizer
 
 
@@ -327,12 +449,20 @@ def train():
     data_args.data_source_names = data_args.data_source_names.split('#')
     data_args.data_source_weights = [int(x) for x in data_args.data_source_weights.split('#')]
 
+    training_args.output_dir = training_args.output_dir.replace('dpo_preference', 'dpo').replace('no_crop_vqa', 'ncrp_vqa')
+
     model, data_module, tokenizer = init_model(model_args, data_args, training_args)
 
-    trainer = MuffinTrainer(model=model,
-                    tokenizer=tokenizer,
-                    args=training_args,
-                    **data_module)
+    if training_args.task == 'LM' or training_args.task == 'OCR':
+        trainer = MuffinTrainer(model=model,
+                        tokenizer=tokenizer,
+                        args=training_args,
+                        **data_module)
+    elif training_args.task == 'DPO':
+        trainer = MuffinDPOTrainer(model=model,
+                                   tokenizer=tokenizer,
+                                   args=training_args,
+                                   **data_module)
 
     # print(f'Training args: {training_args}')
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):

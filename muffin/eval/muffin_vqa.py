@@ -1,14 +1,11 @@
-import io
 import os
 import json
-import base64
 import torch
 import argparse
 
 import torch.utils.data as torch_data
 
 import tqdm
-from PIL import Image
 from functools import partial
 from transformers import AutoTokenizer, AutoConfig
 
@@ -17,43 +14,7 @@ from muffin.conversation import conv_templates
 from muffin.utils import disable_torch_init
 from muffin.model.utils import build_transform
 from transformers import StoppingCriteria
-
-
-class MultimodalQADataset(torch_data.Dataset):
-    def __init__(self, qa_file, question_process):
-        '''
-        qa_file: jsonl file that each line is a dict like {
-            'image': b64img,
-            'question': question_text
-        }
-        '''
-        super().__init__()
-
-        self.qa_file = qa_file
-        self.qa_data = [json.loads(line) for line in open(self.qa_file)]
-        if isinstance(self.qa_data[0], list):
-            self.qa_data = self.qa_data[0] # unwrap one-line json question file
-
-        self.question_process = question_process
-
-    def __getitem__(self, index):
-        item = self.qa_data[index]
-
-        img_b64 = item['image']
-        image = Image.open(io.BytesIO(base64.b64decode(img_b64))).convert('RGB')
-
-        raw_question = item['question']
-        question_text = self.question_process(raw_question)
-        return {
-            'image': image,
-            'raw_question': raw_question,
-            'question': question_text
-        }
-
-
-    def __len__(self):
-        return len(self.qa_data)
-
+from muffin.data.datasets import MultimodalQADataset
 
 
 DEFAULT_IMAGE_TOKEN = "<image>"
@@ -155,10 +116,10 @@ class KeywordsStoppingCriteria(StoppingCriteria):
                 return False
         return True
 
-def init_muffin(model_path):
+def init_muffin(model_path, device = None):
     disable_torch_init()
     model_name = os.path.expanduser(model_path)
-    print(f'Load beit3 model and tokenizer from {model_name}')
+    print(f'Load muffin model and tokenizer from {model_name}')
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     patch_config(model_name)
@@ -173,12 +134,15 @@ def init_muffin(model_path):
         tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
     vision_tower = model.model.vision_tower
-    vision_tower.to(device='cuda', dtype=torch.float16)
+    if device is not None:
+        vision_tower.to(device=device, dtype=torch.float16)
+    else:
+        vision_tower.to(device='cuda', dtype=torch.float16)
+
     vision_config = model.model.vision_config
     vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
     vision_config.use_im_start_end = mm_use_im_start_end
     if mm_use_im_start_end:
-
         vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids(
             [DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
     image_token_len = model.model.config.num_query
@@ -196,7 +160,7 @@ def eval_model(args):
         wrap_question_with_default_conv, image_token_len=image_token_len))
 
     collate_fn = partial(qa_colloator_fn, tokenizer=tokenizer, img_transform=image_processor)
-    dataloader = torch_data.DataLoader(qa_dataset, batch_size=2, collate_fn=collate_fn)
+    dataloader = torch_data.DataLoader(qa_dataset, batch_size=1, collate_fn=collate_fn)
 
     keywords = ['###']
     ans_file = open(answers_file, "w")

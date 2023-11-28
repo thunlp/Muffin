@@ -7,16 +7,15 @@ conda create -n muffin python=3.10
 conda activate muffin
 
 echo "Installing dependencies"
-pip install torch
-pip install transformers
-pip install openai
-pip install timm torchscale
-pip install opencv-python
-pip install protobuf sentencepiece
+pip install -e .
 
 echo "Installing flash-attention"
 git clone --recursive https://github.com/Dao-AILab/flash-attention.git
 cd flash-attention
+
+# uncomment the following line if you have CUDA version < 11.6
+# git checkout 757058d
+
 MAX_JOBS=8 python setup.py install
 cd ..
 
