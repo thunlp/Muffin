@@ -15,7 +15,7 @@ do
         python ./eval/eval_gpt_review_unimm-bench.py \
             --question ./data/unimm-bench.json \
             --answer $REPLY \
-            --rule ./muffin/eval/table/rule.jsonfile \
+            --rule ./eval/data/rule.jsonfile \
             --output $REPLY.unimm-bench_gpt4_eval.jsonl \
             --limit $limit &
         sleep 5
@@ -42,11 +42,11 @@ do
         echo "EVAL qa90 "$REPLY
         python ./eval/eval_gpt_review_visual.py \
             --question ./eval/data/qa90_questions.jsonl \
-            --context ./muffin/eval/table/caps_boxes_coco2014_val_80.jsonl \
+            --context ./eval/data/caps_boxes_coco2014_val_80.jsonl \
             --answer-list \
             ./eval/data/qa90_gpt4_answer.jsonl \
             $REPLY \
-            --rule ./muffin/eval/table/rule.json \
+            --rule ./eval/data/rule.jsonfile \
             --output /home/zhanghaoye/data/eval_test/$REPLY.llava_test_gpt4.jsonl &
         sleep 5
 

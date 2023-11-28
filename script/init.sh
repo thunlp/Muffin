@@ -7,6 +7,7 @@ conda create -n muffin python=3.10
 conda activate muffin
 
 echo "Installing dependencies"
+pip install torch
 pip install transformers
 pip install openai
 pip install timm torchscale
