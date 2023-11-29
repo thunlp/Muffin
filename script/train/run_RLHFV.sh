@@ -41,11 +41,11 @@ dpo_use_average=${11}
 dpo_token_weighted=${12}
 dpo_token_weight=$4
 dpo_beta=${10}
-echo weight is $4 SFT weight is $SFT_weight beta is $dpo_beta
+echo ddpo weight is $4 beta is $dpo_beta
 
 ref_model=$5
 
-bash ./script/train/dpo_muffin_PATH.sh \
+bash ./script/train/ddpo_muffin_PATH.sh \
     $ref_model \
     $bsz \
     $grad_acc \
