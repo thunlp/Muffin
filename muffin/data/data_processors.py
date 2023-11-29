@@ -3,10 +3,10 @@ import glob
 import json
 import base64
 import random
+import pathlib
 
 from PIL import Image
 from typing import List
-
 
 class Register(dict):
     def __init__(self, *args, **kwargs):
@@ -177,7 +177,7 @@ def gather_data_files_by_glob(root: str, pattern='*.tsv'):
 
 @register_data_path('unimm-chat')
 def unimmchat_data_path():
-    data_dir = '/data/public/multimodal/multimodal_data/sft_data/coco_based/vqa_chat_20230628/'
+    data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/unimm-chat'
     return gather_data_files_by_glob(data_dir, '*.tsv')
 
 
@@ -188,10 +188,10 @@ def unimmchat_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, 
         image, out = load_multimodal_conversation(text_b64, img_b64_buffer)
 
         metainfo = {
-            "origin_dataset": origin_dataset,  # unimm-chat folder name
-            "origin_split": origin_split,  # unimm-chat parquet file name
-            "origin_idx": origin_split_inner_idx,  # index in unimm-chat parquet file
-            "image_id": img_path,  # cocoid
+            "origin_dataset": origin_dataset,
+            "origin_split": origin_split,
+            "origin_idx": origin_split_inner_idx,
+            "image_id": img_path,
         }
 
         return {
@@ -204,47 +204,17 @@ def unimmchat_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, 
         raise NotImplemented
 
 
-@register_data_path('llava')
-def llava_instruct_data_path():
-    data_dir = '/data/public/multimodal/multimodal_data/LLaVA/'
-    return gather_data_files_by_glob(data_dir, '*.tsv')
-
-
-@register_data_processor('llava')
-def llava_instruct_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, origin_split_inner_idx, img_path,
-                             intent, img_transformer=None):
-    if intent == 'pretrain' or intent == 'sft':
-        image, out = load_multimodal_conversation(text_b64, img_b64_buffer)
-
-        metainfo = {
-            "origin_dataset": origin_dataset,  # llava folder name
-            "origin_split": origin_split,  # llava parquet file name
-            "origin_idx": origin_split_inner_idx,  # index in llava parquet file
-            "image_id": img_path,  # cocoid
-        }
-
-        return {
-            'image': image,
-            'conversations': out,
-            'idx': origin_split_inner_idx,
-            'metainfo': metainfo,
-        }
-    else:
-        raise NotImplemented
-
-
-@register_data_processor('dpo_cvpr_docrp_vqa')
+@register_data_processor('RLHF-V-Hall_v0')
 def dpo_cvpr_ncrp_vqa_processor(*args, **kwargs):
     return dpo_preference_processor(*args, **kwargs)
 
 
-@register_data_path('dpo_cvpr_ncrp_vqa')
+@register_data_path('RLHF-V-Hall_v0')
 def dpo_cvpr_ncrp_vqa_path():
-    data_dir = '/data/public/multimodal/multimodal_data/dpo/DPO_preference_CVPR24_main/'
+    data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/RLHF-V-Hall_v0'
     return gather_data_files_by_glob(data_dir, pattern='dpo_with_per_token_vqa_logp_train-1401.tsv')
 
 
-@register_data_processor('dpo_1005')
 def dpo_preference_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, origin_split_inner_idx, img_path,
                              intent, img_transformer=None):
     if intent == 'pretrain' or intent == 'sft':
@@ -270,10 +240,10 @@ def dpo_preference_processor(img_b64_buffer, text_b64, origin_dataset, origin_sp
         image = b64_to_PIL_image(img_b64_buffer)
 
         metainfo = {
-            "origin_dataset": origin_dataset,  # dpo data dir
-            "origin_split": origin_split,  # dpo metainfo
-            "origin_idx": origin_split_inner_idx,  # index in dpo parquet file
-            "image_id": img_path,  # cocoid
+            "origin_dataset": origin_dataset,
+            "origin_split": origin_split,
+            "origin_idx": origin_split_inner_idx,
+            "image_id": img_path,
         }
 
         data_dict = {
@@ -296,7 +266,7 @@ def dpo_preference_processor(img_b64_buffer, text_b64, origin_dataset, origin_sp
 
 @register_data_path('vqav2-val')
 def vqav2_val_data_path():
-    data_dir = '/data/public/multimodal/multimodal_data/VQAv2/vqav2_full_tsv'
+    data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/VQAv2'
     _, filenames = gather_data_files_by_glob(data_dir)
     filenames = [f for f in filenames if 'val' in f]
     return data_dir, filenames
@@ -320,10 +290,10 @@ def vqav2_val_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, 
         image = b64_to_PIL_image(img_b64_buffer)
 
         metainfo = {
-            "origin_dataset": origin_dataset,  # vqav2
-            "origin_split": origin_split,  # vqav2 split: val
-            "origin_idx": int(origin_split_inner_idx),  # question_id in vqav2
-            "image_id": img_path,  # cocoid
+            "origin_dataset": origin_dataset,
+            "origin_split": origin_split,
+            "origin_idx": int(origin_split_inner_idx),
+            "image_id": img_path,
         }
 
         return {
@@ -339,7 +309,7 @@ def vqav2_val_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, 
 
 @register_data_path('vqav2-train')
 def vqav2_train_data_path():
-    data_dir = '/data/public/multimodal/multimodal_data/VQAv2/vqav2_full_tsv'
+    data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/VQAv2'
     _, filenames = gather_data_files_by_glob(data_dir)
     filenames = [f for f in filenames if 'train' in f]
     return data_dir, filenames
@@ -364,10 +334,10 @@ def vqav2_train_processor(img_b64_buffer, text_b64, origin_dataset, origin_split
         image = b64_to_PIL_image(img_b64_buffer)
 
         metainfo = {
-            "origin_dataset": origin_dataset,  # vqav2
-            "origin_split": origin_split,  # vqav2 split: train
-            "origin_idx": origin_split_inner_idx,  # question_id in vqav2
-            "image_id": img_path,  # cocoid
+            "origin_dataset": origin_dataset,
+            "origin_split": origin_split,
+            "origin_idx": origin_split_inner_idx,
+            "image_id": img_path,
         }
 
         return {
