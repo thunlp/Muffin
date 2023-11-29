@@ -96,7 +96,7 @@ pip install -e .
 # Install specific version of transformers to make sure you can reproduce the experimental results in our papers
 git clone --recursive git@github.com:huggingface/transformers.git
 cd transformers
-git checkout 1194c3e315996d0bb0c64b851b4d76d9ee63ea04
+git checkout a92e0ad2e20ef4ce28410b5e05c5d63a5a304e65
 pip install .
 cd ..
 ```
@@ -109,8 +109,9 @@ Install additional packages if you need to do training.
 git clone --recursive https://github.com/Dao-AILab/flash-attention.git
 cd flash-attention
 
-# uncomment the following line if you have CUDA version < 11.6
-# git checkout 757058d
+# Uncomment the following line if you have CUDA version <= 11.4
+# git checkout ad11394
+
 MAX_JOBS=8 python setup.py install
 cd ..
 ```
