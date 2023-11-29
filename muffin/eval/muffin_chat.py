@@ -101,6 +101,7 @@ class MuffinForMultiTurnChat(MuffinForSingleTurnChat):
 
     def clear(self):
         self.history = []
+        self.image = None
 
 
 # model, img_processor, image_token_len, tokenizer = init_muffin('/home/yutianyu/Muffin_checkpoints/SFT_exp/muffin_13b_SFT-Muffin_QA_win_SFT_combine-vqav2-train#dpo_sftwin_checked_1005-1026#dpo_sftwin_checked_1103-1106-1#1#1-beit3_large_patch16_448/checkpionts/checkpoint-20/')
