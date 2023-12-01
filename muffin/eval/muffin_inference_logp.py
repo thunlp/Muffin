@@ -3,6 +3,7 @@ import json
 import tqdm
 import torch
 import base64
+import argparse
 import torch.utils.data as torch_data
 
 from typing import List
@@ -60,7 +61,7 @@ class PreferenceInferenceDataset(torch_data.Dataset):
         if 'DPO_preference_llava' in data_dir or 'llavarlhf' in tsv_filenames[0]:
             self.data = SingleDataSourceDataset('dpo_preference_llava_7b_v1_preference_hallonly' ,data_dir, tsv_filenames)
         else:
-            self.data = SingleDataSourceDataset('dpo_1005' ,data_dir, tsv_filenames)
+            self.data = SingleDataSourceDataset('RLHF-V-Hall_v0' ,data_dir, tsv_filenames)
 
         self.mm_cfg = {
             'image_processor': img_processor,
@@ -199,26 +200,31 @@ def write_logp_to_preference_tsv(tsv_filename, out_tsv_filename, logps, overwrit
 
     multimodal_img_tsv_writer_prev(out_data, out_tsv_filename)
 
-
-if __name__ == '__main__':
-    model, img_processor, image_token_len, tokenizer = init_muffin('/home/yutianyu/Muffin_checkpoints/SFT_exp/muffin_13b_SFT-Muffin_QA_win_SFT_combine-vqav2-train#dpo_sftwin_checked_1005-1026#dpo_sftwin_checked_1103-1106-1#1#1-beit3_large_patch16_448/checkpionts/checkpoint-20/')
+def inference_logp(args):
+    model, img_processor, image_token_len, tokenizer = init_muffin(args.model_name)
     use_im_start_end = True
 
-    data_dir = '/data/public/multimodal/multimodal_data/dpo/DPO_preference_CVPR24_main'
-    tsv_files = ['dpo_cvpr-1401.tsv', 'dpo_cvpr-100.tsv', 'dpo_cvpr-200.tsv', 'dpo_cvpr-400.tsv', 'dpo_cvpr-800.tsv']
-
-    data_dir = '/data/public/multimodal/multimodal_data/dpo/DPO_preference_human_inspected_1005-1026'
-    tsv_files = ['DPO_preference_checked_1005-1026-545.tsv']
-
-    data_dir = '/data/public/multimodal/multimodal_data/dpo/DPO_preference_human_inspected_1103-1106'
-    tsv_files = ['DPO_preference_checked_1103-1106-521.tsv']
+    tsv_files = [args.tsv_file]
 
     for tsv_filename in tsv_files:
-        win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list = get_multimodal_sample_logps(model, tokenizer, data_dir, [tsv_filename], image_token_len, img_processor, use_im_start_end)
+        win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list = get_multimodal_sample_logps(model, tokenizer, args.data_dir, [tsv_filename], image_token_len, img_processor, use_im_start_end)
         logps = list(zip(win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list))
 
 
-        tsv_filepath = os.path.join(data_dir, tsv_filename)
+        tsv_filepath = os.path.join(args.data_dir, tsv_filename)
 
-        write_logp_to_preference_tsv(tsv_filepath, f'{data_dir}/dpo_with_per_token_after_SFT_with_vqa_logp_train', logps)
+        save_name = '-'.join(tsv_filename.split('-')[:-1])
+        save_name = save_name + '_' + args.logp_file
 
+        write_logp_to_preference_tsv(tsv_filepath, f'{args.data_dir}/{save_name}', logps, overwrite_logps=True)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-name", type=str, default="RLHF-V_v0-SFT-13B")
+    parser.add_argument("--data-dir", type=str)
+    parser.add_argument("--tsv-file", type=str)
+    parser.add_argument("--logp-file", type=str, default="dpo_with_rlhf-v-sft_logp_train")
+    args = parser.parse_args()
+
+    inference_logp(args)

@@ -1,4 +1,5 @@
 import io
+import os
 import glob
 import json
 import base64
@@ -212,7 +213,7 @@ def dpo_cvpr_ncrp_vqa_processor(*args, **kwargs):
 @register_data_path('RLHF-V-Hall_v0')
 def dpo_cvpr_ncrp_vqa_path():
     data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/RLHF-V-Hall_v0'
-    return gather_data_files_by_glob(data_dir, pattern='dpo_with_per_token_vqa_logp_train-1401.tsv')
+    return gather_data_files_by_glob(data_dir, pattern='*dpo_with_rlhf-v-sft_logp_train-1401.tsv')
 
 
 def dpo_preference_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, origin_split_inner_idx, img_path,

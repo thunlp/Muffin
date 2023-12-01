@@ -28,7 +28,7 @@ do
             wait
         fi
     fi
-done 9< <( find $SOURCE_DIR -type f -name "*qa*" -exec printf '%s\0' {} + )
+done 9< <( find $SOURCE_DIR -type f -name "*answer*" -exec printf '%s\0' {} + )
 
 wait
 
@@ -47,7 +47,7 @@ do
             ./eval/data/qa90_gpt4_answer.jsonl \
             $REPLY \
             --rule ./eval/data/rule.jsonfile \
-            --output /home/zhanghaoye/data/eval_test/$REPLY.llava_test_gpt4.jsonl &
+            --output $REPLY.llava_test_gpt4.jsonl &
         sleep 5
 
         C=$((C+1))
@@ -58,6 +58,6 @@ do
             wait
         fi
     fi
-done 9< <( find $SOURCE_DIR -type f -name "*qa*" -exec printf '%s\0' {} + )
+done 9< <( find $SOURCE_DIR -type f -name "*answer*" -exec printf '%s\0' {} + )
 
 wait
