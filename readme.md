@@ -202,9 +202,21 @@ bash ./script/train/run_unimm-chat.sh ./output/checkpoints master finetune_muffi
 ## RLHF
 
 ```Shell
-ref_model=../MuffinQA
+ref_model=./RLHF-V_SFT_weight
 
-bash ./script/train/run_RLHFV.sh ../RLHFV_checkpoints/dpo_exp master RLHFV 5.0 $ref_model dpo_cvpr_docrp_vqa 1 320 40
+bash ./script/train/run_RLHFV.sh \
+    ./RLHFV_checkpoints/dpo_exp \
+    master \
+    RLHFV \
+    1.1 \
+    $ref_model \
+    ./RLHF-V-Dataset \
+    RLHFV_SFT \
+    2160 \
+    360 \
+    0.1 \
+    False \
+    True
 ```
 
 ## Licenses
