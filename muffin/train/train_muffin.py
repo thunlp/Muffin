@@ -15,6 +15,7 @@
 #    limitations under the License.
 
 import os
+import copy
 import timm
 import torch
 import logging
@@ -34,7 +35,7 @@ from muffin import conversation as conversation_lib
 from muffin import LlavaLlamaForCausalLM, Beit3LlavaLlamaForCausalLM
 from muffin.model.muffin import interpolate_beit3
 from muffin.model.utils import stop_gradient_by_name
-from muffin.data.datasets import SingleDataSourceDataset, MultiDataSourceDataset
+from muffin.data.datasets import SingleDataSourceDataset, MultiDataSourceDataset, RLHFVDataset
 from muffin.data.data_processors import register_data_path
 from muffin.train.train_utils import SFT_collator_fn, IGNORE_INDEX, encode_multimodal_sample, encode_multimodal_preference_sample
 
@@ -67,6 +68,8 @@ class DataArguments:
     parquet: bool = False
     data_source_names: str = 'unimm-chat'
     data_source_weights: str = '100'
+    data_dir: str = 'RLHF-V-Dataset'
+    ref_name: str = 'RLHFV_SFT'
 
     dpo_beta: float = 0.5
     dpo_token_weight: float = 3.0
@@ -171,11 +174,15 @@ class LazySupervisedDataset(Dataset):
 class DPODataset(Dataset):
     def __init__(self,
                  tokenizer: transformers.PreTrainedTokenizer,
-                 multimodal_cfg: dict):
+                 data_dir: str,
+                 ref_name: str,
+                 multimodal_cfg: dict,
+                 reference_model = None):
         super(DPODataset, self).__init__()
 
         self.tokenizer = tokenizer
-        self.list_data_dict = create_multi_data_source_dataset(multimodal_cfg['data_source_names'], multimodal_cfg['data_source_weights'])
+        self.list_data_dict = RLHFVDataset(data_dir, ref_name, reference_model, tokenizer,
+            multimodal_cfg['image_token_len'], multimodal_cfg['image_processor'], multimodal_cfg['use_im_start_end'])
         self.multimodal_cfg = multimodal_cfg
 
     def __len__(self):
@@ -274,17 +281,18 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                 data_collator=data_collator)
 
 
-def make_dpo_data_module(tokenizer, data_args):
+def make_dpo_data_module(tokenizer, data_args, reference_model):
     train_dataset = DPODataset(tokenizer=tokenizer,
-                                multimodal_cfg=dict(
+                               data_dir=data_args.data_dir,
+                               ref_name=data_args.ref_name,
+                               reference_model=reference_model,
+                               multimodal_cfg=dict(
                                     is_multimodal=data_args.is_multimodal,
                                     image_token_len=data_args.image_token_len,
                                     image_folder=data_args.image_folder,
                                     image_aspect_ratio=data_args.image_aspect_ratio,
                                     use_im_start_end=getattr(data_args, 'mm_use_im_start_end', False),
-                                    image_processor=getattr(data_args, 'train_image_processor', None),
-                                    data_source_names=getattr(data_args, 'data_source_names'),
-                                    data_source_weights=getattr(data_args, 'data_source_weights')))
+                                    image_processor=getattr(data_args, 'train_image_processor', None)))
     print(f'Train data size is {len(train_dataset)}', flush=True)
     data_collator = DataCollatorForDPODataset(tokenizer=tokenizer, beta=data_args.dpo_beta, mod_token_weight=data_args.dpo_token_weight)
     return dict(train_dataset=train_dataset,
@@ -425,7 +433,7 @@ def init_model(model_args, data_args, training_args):
     if training_args.task == 'LM' or training_args.task == 'OCR':
         data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     elif training_args.task == 'DPO':
-        data_module = make_dpo_data_module(tokenizer, data_args=data_args)
+        data_module = make_dpo_data_module(tokenizer, data_args=data_args, reference_model=copy.deepcopy(model).cuda())
     return model.cuda(), data_module, tokenizer
 
 
@@ -446,10 +454,13 @@ def train():
     if training_args.report_to == 'wandb':
         os.environ['WANDB_CACHE_DIR'] = get_local_dir(['.cache', '_temp'])
 
-    data_args.data_source_names = data_args.data_source_names.split('#')
-    data_args.data_source_weights = [int(x) for x in data_args.data_source_weights.split('#')]
+    if training_args.task == 'LM' or training_args.task == 'OCR':
+        data_args.data_source_names = data_args.data_source_names.split('#')
+        data_args.data_source_weights = [int(x) for x in data_args.data_source_weights.split('#')]
 
-    training_args.output_dir = training_args.output_dir.replace('dpo_preference', 'dpo').replace('no_crop_vqa', 'ncrp_vqa')
+    elif training_args.task == 'DPO':
+        print("DPO data:", data_args.data_dir, data_args.ref_name)
+        training_args.output_dir = training_args.output_dir.replace('dpo_preference', 'dpo').replace('no_crop_vqa', 'ncrp_vqa')
 
     model, data_module, tokenizer = init_model(model_args, data_args, training_args)
 

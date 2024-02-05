@@ -26,16 +26,16 @@ rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT
 
 echo $slave_or_master local_addr=$rdzv_endpoint
 
-bsz=2
+bsz=1
 num_node=1
-grad_acc=2
+grad_acc=1
 
 exp_name=$3
 max_step=$8
 save_step=$9
 
-sft_data=$6
-sft_data_weight=$7
+data_dir=$6
+ref_name=$7
 
 dpo_use_average=${11}
 dpo_token_weighted=${12}
@@ -52,8 +52,8 @@ bash ./script/train/ddpo_muffin_PATH.sh \
     not_used_param \
     $exp_name \
     beit3_large_patch16_448 \
-    $sft_data \
-    $sft_data_weight \
+    $data_dir \
+    $ref_name \
     $max_step \
     $save_step \
     $num_node \

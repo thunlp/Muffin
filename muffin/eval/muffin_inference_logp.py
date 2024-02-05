@@ -1,19 +1,50 @@
-import os
+import io
 import json
 import tqdm
+import copy
 import torch
-import base64
-import argparse
+import itertools
+import pandas as pd
 import torch.utils.data as torch_data
+import PIL.Image as PIL_image
 
-from typing import List
 from functools import partial
 
-from muffin.eval.muffin_vqa import init_muffin
 from muffin.train.train_utils import encode_multimodal_preference_sample, SFT_collator_fn
-from muffin.data.datasets import SingleDataSourceDataset
-from muffin.data.tsv_file_op import multimodal_img_tsv_writer_prev
-from muffin.data.tsv_file import TSVFile
+
+
+def bytes_to_PIL_image(img_buffer):
+    img_io = io.BytesIO(img_buffer)
+    img_io.seek(0)
+    image = PIL_image.open(img_io).convert('RGB')
+    return image
+
+
+class InferenceSampler(torch.utils.data.sampler.Sampler):
+
+    def __init__(self, size):
+        self._size = int(size)
+        assert size > 0
+        self._rank = torch.distributed.get_rank()
+        self._world_size = torch.distributed.get_world_size()
+        self._local_indices = self._get_local_indices(size, self._world_size,
+                                                      self._rank)
+
+    @staticmethod
+    def _get_local_indices(total_size, world_size, rank):
+        shard_size = total_size // world_size
+        left = total_size % world_size
+        shard_sizes = [shard_size + int(r < left) for r in range(world_size)]
+
+        begin = sum(shard_sizes[:rank])
+        end = min(sum(shard_sizes[:rank + 1]), total_size)
+        return range(begin, end)
+
+    def __iter__(self):
+        yield from self._local_indices
+
+    def __len__(self):
+        return len(self._local_indices)
 
 
 def get_batch_logps(logits: torch.FloatTensor, labels: torch.LongTensor, return_per_token_logp=False, return_all=False) -> torch.FloatTensor:
@@ -52,16 +83,13 @@ def get_batch_logps(logits: torch.FloatTensor, labels: torch.LongTensor, return_
 
 class PreferenceInferenceDataset(torch_data.Dataset):
     def __init__(self,
-                 data_dir,
+                 data,
                  tokenizer,
-                 tsv_filenames: List[str],
                  image_token_len,
                  img_processor,
-                 use_im_start_end):
-        if 'DPO_preference_llava' in data_dir or 'llavarlhf' in tsv_filenames[0]:
-            self.data = SingleDataSourceDataset('dpo_preference_llava_7b_v1_preference_hallonly' ,data_dir, tsv_filenames)
-        else:
-            self.data = SingleDataSourceDataset('RLHF-V-Hall_v0' ,data_dir, tsv_filenames)
+                 use_im_start_end=True):
+
+        self.data = data
 
         self.mm_cfg = {
             'image_processor': img_processor,
@@ -73,7 +101,29 @@ class PreferenceInferenceDataset(torch_data.Dataset):
 
     def __getitem__(self, index):
         sample = self.data[index]
-        rej_data_dict, win_data_dict = encode_multimodal_preference_sample(sample, self.tokenizer, self.mm_cfg)
+        metainfo = {
+            "origin_dataset": sample['origin_dataset'],
+            "origin_split": json.loads(sample['origin_split']),
+            "origin_idx": sample['idx'],
+            "image_id": sample['image_path'],
+        }
+
+        text = json.loads(sample['text'])
+        question = {'from': 'human', 'value': f"<image>\n{text['question']}"}
+        chosen = {'from': 'gpt', 'value': text['chosen']}
+        rejected = {'from': 'gpt', 'value': text['rejected']}
+
+        image = bytes_to_PIL_image(sample['image']['bytes'])
+
+        formated_sample = {
+            'image': image,
+            "question": question,
+            "chosen": chosen,
+            "rejected": rejected,
+            "idx": sample['idx'],
+            "metainfo": metainfo
+        }
+        rej_data_dict, win_data_dict = encode_multimodal_preference_sample(formated_sample, self.tokenizer, self.mm_cfg)
         return rej_data_dict, win_data_dict
 
     def __len__(self):
@@ -125,17 +175,7 @@ def preference_collator_fn(instances, pad_token_id):
     return batch
 
 
-def get_multimodal_sample_logps(model, tokenizer, data_dir, tsv_files, image_token_len, img_processor, use_im_start_end):
-    dataset = PreferenceInferenceDataset(data_dir=data_dir,
-                                    tokenizer=tokenizer,
-                                    tsv_filenames=tsv_files,
-                                    image_token_len=image_token_len,
-                                    img_processor=img_processor,
-                                    use_im_start_end=use_im_start_end)
-    collate_fn = partial(preference_collator_fn, pad_token_id=tokenizer.pad_token_id)
-    dataloader = torch_data.DataLoader(dataset, batch_size=1, collate_fn=collate_fn,
-                                       num_workers=5, shuffle=False)
-
+def get_multimodal_sample_logps(model, dataloader):
     win_logp_list = []
     rej_logp_list = []
 
@@ -180,51 +220,65 @@ def get_multimodal_sample_logps(model, tokenizer, data_dir, tsv_files, image_tok
     return win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list
 
 
-def write_logp_to_preference_tsv(tsv_filename, out_tsv_filename, logps, overwrite_logps=False):
-    origin_data = TSVFile(tsv_filename)
-
+def write_logp_to_preference_parquet(origin_data, cache_file, logps, overwrite_logps=False):
     out_data = []
-    for line, logp_data in tqdm.tqdm(zip(origin_data, logps)):
-        text_b64 = line[2]
-        text = base64.b64decode(text_b64).decode('utf-8')
-        preference_data = json.loads(text)
-        if len(preference_data) == 4:
+
+    for index in range(len(origin_data)):
+        line = origin_data[index]
+        logp_data = logps[index]
+
+        new_line = copy.deepcopy(line)
+
+        text = json.loads(new_line['text'])
+
+        if 'logps' in text.keys():
             assert overwrite_logps, 'Found existing logp data, pass overwrite_logps=True to force overwritting'
-            preference_data[3] = logp_data
+            text['logps'] = logp_data
+            new_line['text'] = json.dumps(text)
+
         else:
-            assert len(preference_data) == 3, f'Undefined data structure, expecting [Q, Win, Rej], got {text}'
-            preference_data.append(logp_data)
+            assert list(text.keys()) == ['question', 'chosen', 'rejected'], f'Undefined data structure, expecting [Q, Win, Rej], got {text.keys()}'
+            text['logps'] = logp_data
+            new_line['text'] = json.dumps(text)
 
-        line[2] = base64.b64encode(json.dumps(preference_data).encode('utf-8')).decode('utf-8')
-        out_data.append(line)
+        out_data.append(new_line)
 
-    multimodal_img_tsv_writer_prev(out_data, out_tsv_filename)
+    df = pd.DataFrame(out_data)
 
-def inference_logp(args):
-    model, img_processor, image_token_len, tokenizer = init_muffin(args.model_name)
-    use_im_start_end = True
+    if torch.distributed.get_rank() == 0:
+        df.to_parquet(cache_file)
 
-    tsv_files = [args.tsv_file]
+    torch.distributed.barrier()
 
-    for tsv_filename in tsv_files:
-        win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list = get_multimodal_sample_logps(model, tokenizer, args.data_dir, [tsv_filename], image_token_len, img_processor, use_im_start_end)
-        logps = list(zip(win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list))
+    return df
 
+def inference_logp(model, tokenizer, hf_data, cache_file, image_token_len, img_processor, use_im_start_end):
+    model = model.to(dtype=torch.bfloat16, device='cuda')
+    dataset = PreferenceInferenceDataset(tokenizer=tokenizer,
+                                    data = hf_data,
+                                    image_token_len=image_token_len,
+                                    img_processor=img_processor,
+                                    use_im_start_end=use_im_start_end)
+    collate_fn = partial(preference_collator_fn, pad_token_id=tokenizer.pad_token_id)
+    dataloader = torch_data.DataLoader(dataset, batch_size=1, collate_fn=collate_fn,
+                                       num_workers=5, shuffle=False, sampler=InferenceSampler(len(dataset)))
 
-        tsv_filepath = os.path.join(args.data_dir, tsv_filename)
+    outputs = get_multimodal_sample_logps(model, dataloader) # win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list
 
-        save_name = '-'.join(tsv_filename.split('-')[:-1])
-        save_name = save_name + '_' + args.logp_file
+    world_size = torch.distributed.get_world_size()
+    merged_outputs = [[None for _ in range(world_size)] for i in range(len(outputs))]
+    for i in range(len(outputs)):
+        torch.distributed.all_gather_object(merged_outputs[i], outputs[i])
+        merged_outputs[i] = [_ for _ in itertools.chain.from_iterable(merged_outputs[i])]
 
-        write_logp_to_preference_tsv(tsv_filepath, f'{args.data_dir}/{save_name}', logps, overwrite_logps=True)
+    win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list \
+        = merged_outputs
 
+    logps = list(zip(win_logp_list, win_avg_logp_list, win_per_token_logp_list, rej_logp_list, rej_avg_logp_list, rej_per_token_logp_list))
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="RLHF-V_v0-SFT-13B")
-    parser.add_argument("--data-dir", type=str)
-    parser.add_argument("--tsv-file", type=str)
-    parser.add_argument("--logp-file", type=str, default="dpo_with_rlhf-v-sft_logp_train")
-    args = parser.parse_args()
+    df = write_logp_to_preference_parquet(dataset.data, cache_file, logps, overwrite_logps=False)
 
-    inference_logp(args)
+    torch.distributed.barrier()
+
+    del model
+    return df
