@@ -1,15 +1,87 @@
 import io
+import os
 import json
+import torch
 import numpy
 import base64
-
+import pandas as pd
 import os.path as op
+import datasets as hf_datasets
 import torch.utils.data as torch_data
 
 from PIL import Image
 from typing import List, Iterator
 from muffin.data.tsv_file import TSVFile
 from muffin.data.data_processors import register_data_processor
+from muffin.eval.muffin_inference_logp import inference_logp
+
+def bytes_to_PIL_image(img_buffer):
+    img_io = io.BytesIO(img_buffer)
+    img_io.seek(0)
+    image = Image.open(img_io).convert('RGB')
+    return image
+
+def read_jsonl(file_path):
+    with open(file_path, "r", encoding="utf-8") as file:
+        return [json.loads(line) for line in file]
+
+class RLHFVDataset(torch_data.Dataset):
+    def __init__(self, data_dir: str, ref_name: str, reference_model=None,
+                 tokenizer=None, image_token_len=None, img_processor=None, use_im_start_end=True):
+        super().__init__()
+
+        self.data_path = f'{data_dir}/{ref_name}_with_logp.parquet'
+
+        if not op.exists(self.data_path):
+            os.makedirs(data_dir, exist_ok=True)
+
+            assert reference_model is not None, "`reference_model` is mandatory when logps do not exist."
+
+            hf_data = hf_datasets.load_dataset("HaoyeZhang/RLHF-V-Dataset")['train'].cast_column("image", hf_datasets.Image(decode=False))
+
+            inference_logp(reference_model, tokenizer, hf_data, self.data_path,
+                            image_token_len, img_processor, use_im_start_end)
+
+            torch.distributed.barrier()
+
+            self.data = pd.read_parquet(self.data_path)
+
+            # print(f'{torch.distributed.get_rank()} data len: {len(self.data)}')
+        else:
+            self.data = pd.read_parquet(self.data_path)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        sample = self.data.iloc[index]
+        text = json.loads(sample['text'])
+        question = {'from': 'human', 'value': f"<image>\n{text['question']}"}
+        chosen = {'from': 'gpt', 'value': text['chosen']}
+        rejected = {'from': 'gpt', 'value': text['rejected']}
+
+        image = bytes_to_PIL_image(sample['image']['bytes'])
+
+        metainfo = {
+            "origin_dataset": sample['origin_dataset'],
+            "origin_split": sample['origin_split'],
+            "origin_idx": sample['idx'],
+            "image_id": sample['image_path'],
+        }
+
+        data_dict = {
+            'image': image,
+            "question": question,
+            "chosen": chosen,
+            "rejected": rejected,
+            "idx": sample['idx'],
+            "metainfo": metainfo
+        }
+
+        (data_dict['ref_win_logp'], data_dict['ref_win_avg_logp'], data_dict['ref_win_per_token_logp'],
+        data_dict['ref_rej_logp'], data_dict['ref_rej_avg_logp'], data_dict['ref_rej_per_token_logp']) = text['logps']
+
+        return data_dict
 
 
 class MultimodalQADataset(torch_data.Dataset):

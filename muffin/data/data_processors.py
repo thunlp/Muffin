@@ -205,15 +205,14 @@ def unimmchat_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, 
         raise NotImplemented
 
 
-@register_data_processor('RLHF-V-Hall_v0')
+@register_data_processor('RLHF-V-Dataset')
 def dpo_cvpr_ncrp_vqa_processor(*args, **kwargs):
     return dpo_preference_processor(*args, **kwargs)
 
-
-@register_data_path('RLHF-V-Hall_v0')
+@register_data_path('RLHF-V-Dataset')
 def dpo_cvpr_ncrp_vqa_path():
-    data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/RLHF-V-Hall_v0'
-    return gather_data_files_by_glob(data_dir, pattern='*dpo_with_rlhf-v-sft_logp_train-1401.tsv')
+    data_dir = pathlib.Path(__file__).parent.resolve() / '../../data/RLHF-V-Dataset'
+    return gather_data_files_by_glob(data_dir, pattern='RLHF-V-Dataset_withlogp-1401.tsv')
 
 
 def dpo_preference_processor(img_b64_buffer, text_b64, origin_dataset, origin_split, origin_split_inner_idx, img_path,

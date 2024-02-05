@@ -17,9 +17,9 @@ RUNNER="torchrun --nnodes=${NUM_NODE} --nproc_per_node=${GPUS_PER_NODE} --rdzv_i
 echo RUNNER=$RUNNER
 
 ###===> Start preparing data
-sft_data=$7
-sft_data_weight=$8
-echo Data config: $sft_data $sft_data_weight
+data_dir=$7
+ref_name=$8
+echo Data config: $data_dir $ref_name
 ###<===
 
 
@@ -60,8 +60,10 @@ $RUNNER ./muffin/train/train_mem_muffin.py \
     --save_strategy "steps" \
     --save_steps $save_step \
     --save_total_limit $num_save \
-    --data_source_names  $sft_data \
-    --data_source_weights $sft_data_weight \
+    --data_source_names  '' \
+    --data_source_weights '' \
+    --data_dir $data_dir \
+    --ref_name $ref_name \
     --max_steps $max_step \
     --learning_rate 5e-7 \
     --weight_decay 0. \
